@@ -1,0 +1,6 @@
+google-genai
+gspread
+google-auth
+requests
+feedparser
+trafilatura
