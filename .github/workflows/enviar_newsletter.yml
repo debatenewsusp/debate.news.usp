@@ -1,0 +1,40 @@
+name: Enviar newsletter
+
+on:
+  schedule:
+    - cron: "5 10,12,15,17 * * *"   # 7h05, 9h05, 12h05 e 14h05 em São Paulo
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Só simular (não envia e-mails e não grava nada)"
+        type: boolean
+        default: true
+      hora_simulada:
+        description: "Opcional: hora de São Paulo a simular (0 a 23), ex.: 7"
+        required: false
+        default: ""
+
+concurrency:
+  group: enviar-newsletter
+  cancel-in-progress: false
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python enviar_newsletter.py
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          URL_APP: ${{ secrets.URL_APP }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          HORA_SIMULADA: ${{ inputs.hora_simulada }}
