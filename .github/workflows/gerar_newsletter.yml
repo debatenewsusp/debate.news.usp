@@ -1,0 +1,23 @@
+name: Gerar newsletter diária
+ 
+on:
+  schedule:
+    - cron: "0 10 * * *"   # 10:00 UTC = 07:00 em São Paulo
+  workflow_dispatch:        # botão "Run workflow" para testar na hora
+ 
+jobs:
+  gerar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python gerar_newsletter.py
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
