@@ -1,10 +1,10 @@
 name: Gerar newsletter diária
- 
+
 on:
   schedule:
-    - cron: "0 10 * * *"   # 10:00 UTC = 07:00 em São Paulo
+    - cron: "30 8 * * *"   # 08:30 UTC = 05:30 em São Paulo (antes do primeiro horário de envio, 7h)
   workflow_dispatch:        # botão "Run workflow" para testar na hora
- 
+
 jobs:
   gerar:
     runs-on: ubuntu-latest
