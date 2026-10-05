@@ -17,7 +17,8 @@ Variáveis de ambiente (GitHub Secrets):
 
 Abas da planilha:
 - "log":     data | secao | tema
-- "edicoes": data | conteudo_json
+- "edicoes": data | conteudo_json (se passar de 45.000 caracteres, continua nas colunas seguintes)
+- "leitura": criada automaticamente; uma linha por seção, texto formatado para conferir a edição
 
 Para trocar ou acrescentar fontes, edite só o dicionário FEEDS abaixo.
 Feeds que falharem são pulados e listados no log da execução.
@@ -30,6 +31,7 @@ import time
 import html
 import calendar
 import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 import feedparser
@@ -40,6 +42,8 @@ from google.genai import types
 from google.oauth2.service_account import Credentials
 
 MODELO = "gemini-3.1-flash-lite"
+FUSO = ZoneInfo("America/Sao_Paulo")
+LIMITE_CELULA = 45000      # o Google Sheets aceita no máximo 50.000 caracteres por célula
 DIAS_DE_HISTORICO = 7
 JANELA_HORAS = 48          # só entram notícias das últimas 48h
 MAX_POR_FEED = 8
@@ -269,6 +273,10 @@ CAMPOS_OBRIGATORIOS = ["titulo", "tema", "fato", "mecanismo", "visoes", "impacto
 
 # ---------- Planilha ----------
 
+def hoje_sp():
+    return datetime.datetime.now(FUSO).date()
+
+
 def conectar_planilha():
     credenciais_dict = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
     escopos = [
@@ -282,7 +290,7 @@ def conectar_planilha():
 
 def carregar_log(planilha):
     linhas = planilha.worksheet("log").get_all_records()
-    limite = datetime.date.today() - datetime.timedelta(days=DIAS_DE_HISTORICO)
+    limite = hoje_sp() - datetime.timedelta(days=DIAS_DE_HISTORICO)
     log = {secao: [] for secao in SECOES}
     for linha in linhas:
         try:
@@ -298,9 +306,10 @@ def carregar_log(planilha):
 
 
 def salvar_edicao(planilha, data_hoje, edicao):
-    planilha.worksheet("edicoes").append_row(
-        [str(data_hoje), json.dumps(edicao, ensure_ascii=False)]
-    )
+    """Grava o JSON em colunas B, C, D... (uma célula guarda no máximo 50.000 caracteres)."""
+    texto = json.dumps(edicao, ensure_ascii=False)
+    partes = [texto[i:i + LIMITE_CELULA] for i in range(0, len(texto), LIMITE_CELULA)]
+    planilha.worksheet("edicoes").append_row([str(data_hoje)] + partes, value_input_option="RAW")
 
 
 def atualizar_log(planilha, data_hoje, edicao):
@@ -552,11 +561,93 @@ def validar(edicao):
         raise ValueError("Edição incompleta, nada foi salvo: " + "; ".join(problemas))
 
 
+# ---------- Aba de leitura (texto legível para conferir a edição) ----------
+
+NOME_ABA_LEITURA = "leitura"
+CABECALHO_LEITURA = ["data", "secao", "titulo", "tipo", "fato", "mecanismo", "visoes", "impactos", "fontes"]
+LARGURAS_LEITURA = [90, 150, 260, 80, 450, 450, 450, 450, 300]
+
+
+def numerar(lista):
+    return "\n".join(f"{n}. {texto}" for n, texto in enumerate(lista or [], start=1))
+
+
+def formatar_visoes(visoes):
+    blocos = []
+    for visao in visoes or []:
+        pontos = "\n".join(
+            f"  {n}. {ponto}" for n, ponto in enumerate(visao.get("pontos", []), start=1)
+        )
+        blocos.append(f"{visao.get('rotulo', '')}:\n{pontos}")
+    return "\n\n".join(blocos)
+
+
+def formatar_fontes(fontes):
+    return "\n".join(f"{f.get('nome', '')}: {f.get('url', '')}" for f in fontes or [])
+
+
+def linhas_de_leitura(data_hoje, edicao):
+    linhas = []
+    for secao in SECOES:
+        b = edicao[secao]
+        linhas.append([
+            str(data_hoje),
+            secao,
+            b.get("titulo", ""),
+            b.get("tipo", ""),
+            b.get("fato", ""),
+            numerar(b.get("mecanismo")),
+            formatar_visoes(b.get("visoes")),
+            numerar(b.get("impactos")),
+            formatar_fontes(b.get("fontes")),
+        ])
+    return linhas
+
+
+def criar_aba_leitura(planilha):
+    aba = planilha.add_worksheet(title=NOME_ABA_LEITURA, rows=1000, cols=len(CABECALHO_LEITURA))
+    aba.append_row(CABECALHO_LEITURA)
+    aba.format(
+        "A:I",
+        {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"},
+    )
+    aba.format("A1:I1", {"textFormat": {"bold": True}})
+    pedidos = [
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": aba.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": i,
+                    "endIndex": i + 1,
+                },
+                "properties": {"pixelSize": largura},
+                "fields": "pixelSize",
+            }
+        }
+        for i, largura in enumerate(LARGURAS_LEITURA)
+    ]
+    planilha.batch_update({"requests": pedidos})
+    return aba
+
+
+def salvar_leitura(planilha, data_hoje, edicao):
+    """Extra de conveniência: se falhar, não impede o restante do fluxo."""
+    try:
+        try:
+            aba = planilha.worksheet(NOME_ABA_LEITURA)
+        except gspread.WorksheetNotFound:
+            aba = criar_aba_leitura(planilha)
+        aba.append_rows(linhas_de_leitura(data_hoje, edicao), value_input_option="RAW")
+    except Exception as erro:
+        print(f"[AVISO] não consegui gravar a aba de leitura: {type(erro).__name__}: {erro}")
+
+
 # ---------- Execução ----------
 
 def main():
     planilha = conectar_planilha()
-    data_hoje = datetime.date.today()
+    data_hoje = hoje_sp()
 
     log = carregar_log(planilha)
     noticias = coletar_noticias()
@@ -567,6 +658,7 @@ def main():
 
     salvar_edicao(planilha, data_hoje, edicao)
     atualizar_log(planilha, data_hoje, edicao)
+    salvar_leitura(planilha, data_hoje, edicao)
     print(f"Edição de {data_hoje} gerada e salva com sucesso.")
 
 
